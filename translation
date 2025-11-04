@@ -1,0 +1,300 @@
+"""
+Multi-LLM Translation Pipeline
+Sanskrit → English using 6-stage LLM orchestration
+Gemini → Perplexity → Claude → Llama → Perplexity → Claude
+"""
+
+import asyncio
+from typing import Dict, List, Optional
+import logging
+from anthropic import AsyncAnthropic
+import google.generativeai as genai
+from openai import AsyncOpenAI
+import httpx
+
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
+class TranslationPipeline:
+    """Multi-stage LLM pipeline for Sanskrit translation"""
+    
+    def __init__(self):
+        # Initialize API clients
+        self.claude_client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+        genai.configure(api_key=settings.GOOGLE_API_KEY)
+        self.gemini_model = genai.GenerativeModel('gemini-pro')
+        self.openai_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        
+        # Perplexity uses OpenAI-compatible API
+        self.perplexity_client = AsyncOpenAI(
+            api_key=settings.PERPLEXITY_API_KEY,
+            base_url="https://api.perplexity.ai"
+        )
+    
+    async def translate_scripture(
+        self,
+        sanskrit_text: str,
+        source_name: str,
+        chapter: Optional[str] = None,
+        verse_number: Optional[str] = None,
+        curriculum_context: Optional[str] = None
+    ) -> Dict:
+        """
+        Complete 6-stage translation pipeline
+        
+        Args:
+            sanskrit_text: Original Sanskrit verse
+            source_name: Scripture source (e.g., "Bhagavad Gita")
+            chapter: Chapter/section number
+            verse_number: Verse number
+            curriculum_context: Wisdom from older scriptures for interpretation
+        
+        Returns:
+            Dictionary with all translation stages and final output
+        """
+        
+        logger.info(f"Starting translation: {source_name} {chapter}:{verse_number}")
+        
+        try:
+            # Stage 1: Gemini - Literal Translation
+            stage1 = await self._stage1_gemini_literal(sanskrit_text, source_name)
+            
+            # Stage 2: Perplexity - Dictionary Verification
+            stage2 = await self._stage2_perplexity_verification(
+                sanskrit_text, stage1, source_name
+            )
+            
+            # Stage 3: Claude - Linguistic Sense-Making
+            stage3 = await self._stage3_claude_linguistic(
+                sanskrit_text, stage1, stage2, source_name
+            )
+            
+            # Stage 4: Llama - Curriculum Interpretation (using older scriptures)
+            stage4 = await self._stage4_llama_curriculum(
+                sanskrit_text, stage3, curriculum_context, source_name
+            )
+            
+            # Stage 5: Perplexity - Scriptural Cross-Referencing
+            stage5 = await self._stage5_perplexity_crossref(
+                sanskrit_text, stage4, source_name
+            )
+            
+            # Stage 6: Claude - Final Synthesis
+            stage6 = await self._stage6_claude_synthesis(
+                sanskrit_text, stage1, stage2, stage3, stage4, stage5, source_name
+            )
+            
+            result = {
+                "sanskrit_text": sanskrit_text,
+                "source": f"{source_name} {chapter}:{verse_number}",
+                "stage1_gemini_literal": stage1,
+                "stage2_perplexity_verification": stage2,
+                "stage3_claude_linguistic": stage3,
+                "stage4_llama_curriculum": stage4,
+                "stage5_perplexity_crossref": stage5,
+                "stage6_claude_final": stage6,
+                "final_translation": stage6,
+                "pipeline_complete": True
+            }
+            
+            logger.info(f"✅ Translation complete: {source_name} {chapter}:{verse_number}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Translation pipeline error: {e}")
+            raise
+    
+    async def _stage1_gemini_literal(self, sanskrit: str, source: str) -> str:
+        """Stage 1: Gemini provides literal word-by-word translation"""
+        
+        prompt = f"""You are a Sanskrit scholar. Provide a literal, word-by-word translation of this verse from {source}.
+
+Sanskrit text: {sanskrit}
+
+Provide:
+1. Word-by-word breakdown (Sanskrit word → English meaning)
+2. Literal sentence structure translation (keeping Sanskrit grammar)
+3. Keep it accurate and scholarly, not interpretive
+
+Format your response clearly with the literal translation."""
+
+        try:
+            response = await asyncio.to_thread(
+                self.gemini_model.generate_content,
+                prompt
+            )
+            return response.text
+        except Exception as e:
+            logger.error(f"Gemini Stage 1 error: {e}")
+            raise
+    
+    async def _stage2_perplexity_verification(
+        self, sanskrit: str, stage1: str, source: str
+    ) -> str:
+        """Stage 2: Perplexity verifies with Sanskrit dictionaries"""
+        
+        prompt = f"""You are a Sanskrit linguistic expert with access to authoritative dictionaries.
+
+Original Sanskrit: {sanskrit}
+Source: {source}
+Literal translation from Stage 1: {stage1}
+
+Task: Verify the word meanings using Sanskrit dictionaries and scholarly sources. Check:
+1. Accuracy of word meanings
+2. Alternate interpretations of compound words (sandhi)
+3. Grammatical forms and cases
+4. Any corrections needed to Stage 1
+
+Provide dictionary-verified corrections or confirmations."""
+
+        try:
+            response = await self.perplexity_client.chat.completions.create(
+                model="llama-3.1-sonar-large-128k-online",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=settings.MAX_TOKENS_PER_STAGE
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            logger.error(f"Perplexity Stage 2 error: {e}")
+            raise
+    
+    async def _stage3_claude_linguistic(
+        self, sanskrit: str, stage1: str, stage2: str, source: str
+    ) -> str:
+        """Stage 3: Claude creates natural English interpretation"""
+        
+        prompt = f"""You are a translator making Sanskrit wisdom accessible to modern English readers.
+
+Sanskrit: {sanskrit}
+Source: {source}
+
+Stage 1 (Literal): {stage1}
+Stage 2 (Verified): {stage2}
+
+Task: Create a natural, flowing English translation that:
+1. Preserves the philosophical meaning
+2. Uses clear, modern English (not archaic)
+3. Maintains the depth and nuance
+4. Is readable and elegant
+
+Provide the natural English translation."""
+
+        try:
+            message = await self.claude_client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=settings.MAX_TOKENS_PER_STAGE,
+                temperature=settings.TEMPERATURE,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return message.content[0].text
+        except Exception as e:
+            logger.error(f"Claude Stage 3 error: {e}")
+            raise
+    
+    async def _stage4_llama_curriculum(
+        self, sanskrit: str, stage3: str, curriculum_context: Optional[str], source: str
+    ) -> str:
+        """Stage 4: Llama interprets using older scripture wisdom (curriculum learning)"""
+        
+        context_text = curriculum_context or "No prior scripture context available."
+        
+        prompt = f"""You are interpreting a Sanskrit verse using wisdom from older scriptures.
+
+Current verse from {source}:
+Sanskrit: {sanskrit}
+Translation so far: {stage3}
+
+Context from OLDER scriptures (Vedas, earlier Upanishads):
+{context_text}
+
+Task: Deepen the interpretation by showing how this verse builds upon or relates to the wisdom of older texts. This is "curriculum learning" - using earlier teachings to understand later ones.
+
+Provide the enriched interpretation."""
+
+        try:
+            response = await self.openai_client.chat.completions.create(
+                model="gpt-4-turbo-preview",  # Or use local Llama via Ollama
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=settings.MAX_TOKENS_PER_STAGE,
+                temperature=settings.TEMPERATURE
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            logger.error(f"Llama Stage 4 error: {e}")
+            raise
+    
+    async def _stage5_perplexity_crossref(
+        self, sanskrit: str, stage4: str, source: str
+    ) -> str:
+        """Stage 5: Perplexity finds cross-references in other scriptures"""
+        
+        prompt = f"""You are a comparative scripture scholar.
+
+Current verse: {sanskrit}
+From: {source}
+Current interpretation: {stage4}
+
+Task: Find and cite similar teachings from other Sanskrit scriptures:
+1. Related verses from other texts
+2. Similar philosophical concepts
+3. Historical commentary by recognized scholars
+4. Cross-references that illuminate this teaching
+
+Provide the cross-references with sources."""
+
+        try:
+            response = await self.perplexity_client.chat.completions.create(
+                model="llama-3.1-sonar-large-128k-online",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=settings.MAX_TOKENS_PER_STAGE
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            logger.error(f"Perplexity Stage 5 error: {e}")
+            raise
+    
+    async def _stage6_claude_synthesis(
+        self,
+        sanskrit: str,
+        stage1: str,
+        stage2: str,
+        stage3: str,
+        stage4: str,
+        stage5: str,
+        source: str
+    ) -> str:
+        """Stage 6: Claude synthesizes all stages into final wisdom"""
+        
+        prompt = f"""You are synthesizing a complete, beautiful translation of a Sanskrit verse.
+
+Original: {sanskrit}
+Source: {source}
+
+Translation Journey:
+- Literal translation: {stage1}
+- Dictionary verification: {stage2}
+- Natural English: {stage3}
+- Curriculum interpretation: {stage4}
+- Cross-references: {stage5}
+
+Task: Create the final, definitive translation that:
+1. Is accurate and beautiful
+2. Preserves philosophical depth
+3. Is clear and inspiring for modern readers
+4. Integrates insights from all previous stages
+5. Can stand alone as wisdom
+
+Provide ONLY the final translation (2-4 sentences), nothing else."""
+
+        try:
+            message = await self.claude_client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=settings.MAX_TOKENS_PER_STAGE,
+                temperature=settings.TEMPERATURE,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return message.content[0].text
+        except Exception as e:
+            logger.error(f"Claude Stage 6 error: {e}")
+            raise
