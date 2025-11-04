@@ -1,0 +1,320 @@
+# 🕉️ Ancient Wisdom Guidance App - Backend
+
+A spiritual guidance application that delivers personalized wisdom from Sanskrit scriptures using multi-LLM translation, RAG, and crisis detection.
+
+## ✨ Features
+
+- **Multi-LLM Translation Pipeline**: 6-stage Sanskrit→English translation (Gemini → Perplexity → Claude → Llama → Perplexity → Claude)
+- **RAG System**: Hybrid semantic + keyword search with Weaviate vector database
+- **Crisis Detection**: Multi-layer detection for suicidal ideation with immediate intervention
+- **Personalized Wisdom**: Journey-stage-aware responses tailored to user's spiritual growth
+- **Memory System**: Short-term (Redis) + Long-term (PostgreSQL) memory with auto-consolidation
+- **Feedback Loop**: Auto-learning system that adapts to user preferences
+- **Visual Generation**: 6-scene cosmic story creation (integration-ready)
+- **Evaluation Metrics**: Comprehensive quality scoring (BLEU, ROUGE, faithfulness, hallucination checks)
+
+## 📁 Project Structure
+
+```
+ancient-wisdom-backend/
+├── app/
+│   ├── __init__.py
+│   ├── main.py                    # FastAPI application entry point
+│   ├── api/
+│   │   └── v1/
+│   │       ├── __init__.py
+│   │       ├── auth.py            # Authentication endpoints
+│   │       ├── wisdom.py          # Main wisdom endpoints
+│   │       ├── feedback.py        # Feedback endpoints
+│   │       ├── crisis.py          # Crisis management
+│   │       ├── memory.py          # Memory management
+│   │       └── visual.py          # Visual generation
+│   ├── core/
+│   │   ├── __init__.py
+│   │   ├── config.py              # Settings & configuration
+│   │   ├── database.py            # PostgreSQL connection
+│   │   └── vector_store.py        # Weaviate connection
+│   ├── models/
+│   │   ├── __init__.py
+│   │   └── models.py              # SQLAlchemy models
+│   └── services/
+│       ├── __init__.py
+│       ├── crisis_detector.py     # Crisis detection
+│       ├── translation_pipeline.py # Multi-LLM translation
+│       ├── wisdom_service.py      # Main RAG + wisdom
+│       └── memory_service.py      # Memory management
+├── data/
+│   ├── uploads/                   # User uploaded scriptures
+│   └── processed/                 # Processed data
+├── tests/                         # Unit tests
+├── .env                           # Environment variables (create from .env.example)
+├── .env.example                   # Example environment variables
+├── requirements.txt               # Python dependencies
+├── alembic.ini                    # Database migration config
+└── README.md                      # This file
+```
+
+## 🚀 Quick Start
+
+### Prerequisites
+
+- Python 3.11+
+- PostgreSQL 15+
+- Redis 7+
+- Weaviate (local or cloud)
+- API Keys: Anthropic (Claude), Google (Gemini), Perplexity, OpenAI
+
+### 1. Clone & Setup
+
+```bash
+# Create project directory
+mkdir ancient-wisdom-backend
+cd ancient-wisdom-backend
+
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+### 2. Setup Databases
+
+**PostgreSQL:**
+```bash
+# Create database
+createdb ancient_wisdom_db
+
+# Or using psql
+psql -U postgres
+CREATE DATABASE ancient_wisdom_db;
+```
+
+**Redis:**
+```bash
+# Start Redis (if not running)
+redis-server
+```
+
+**Weaviate (Local):**
+```bash
+# Using Docker
+docker run -d \
+  -p 8080:8080 \
+  -e QUERY_DEFAULTS_LIMIT=25 \
+  -e AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true \
+  -e PERSISTENCE_DATA_PATH='/var/lib/weaviate' \
+  semitechnologies/weaviate:latest
+```
+
+### 3. Configure Environment
+
+```bash
+# Copy example env file
+cp .env.example .env
+
+# Edit .env with your actual values
+nano .env  # or use your favorite editor
+```
+
+**Required API Keys:**
+- `ANTHROPIC_API_KEY` - Get from https://console.anthropic.com
+- `GOOGLE_API_KEY` - Get from https://makersuite.google.com/app/apikey
+- `PERPLEXITY_API_KEY` - Get from https://www.perplexity.ai/settings/api
+- `OPENAI_API_KEY` - Get from https://platform.openai.com/api-keys
+
+### 4. Initialize Database
+
+```bash
+# Run database migrations
+alembic upgrade head
+
+# Or if migrations don't exist yet, tables will be created automatically on first run
+```
+
+### 5. Run the Application
+
+```bash
+# Development mode
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+# Production mode
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+```
+
+### 6. Test the API
+
+Visit: http://localhost:8000/docs
+
+You'll see the interactive API documentation (Swagger UI)
+
+## 📝 API Endpoints
+
+### Authentication
+- `POST /api/v1/auth/register` - Register new user
+- `POST /api/v1/auth/login` - Login
+- `GET /api/v1/auth/profile` - Get profile
+- `PUT /api/v1/auth/profile` - Update profile
+
+### Wisdom
+- `POST /api/v1/wisdom/ask` - **Main endpoint**: Ask for wisdom
+- `GET /api/v1/wisdom/conversation-history` - Get history
+- `GET /api/v1/wisdom/journey-analysis` - Get spiritual journey insights
+
+### Feedback
+- `POST /api/v1/feedback/submit` - Submit feedback
+- `POST /api/v1/feedback/mood` - Update mood
+- `GET /api/v1/feedback/stats` - Get feedback statistics
+
+### Crisis
+- `GET /api/v1/crisis/helplines` - Get crisis helplines
+- `GET /api/v1/crisis/history` - Get crisis detection history
+
+### Memory
+- `GET /api/v1/memory/short-term` - Get short-term memory
+- `DELETE /api/v1/memory/short-term` - Clear short-term memory
+- `POST /api/v1/memory/consolidate` - Trigger memory consolidation
+
+### Visual
+- `POST /api/v1/visual/generate` - Generate 6-scene visual story
+- `GET /api/v1/visual/download/{id}` - Download visual
+- `GET /api/v1/visual/history` - Get visual history
+
+## 🧪 Testing
+
+```bash
+# Run tests
+pytest
+
+# Run with coverage
+pytest --cov=app tests/
+
+# Run specific test file
+pytest tests/test_wisdom_service.py -v
+```
+
+## 🔧 Configuration
+
+Key settings in `.env`:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DATABASE_URL` | PostgreSQL connection | Required |
+| `WEAVIATE_URL` | Weaviate endpoint | http://localhost:8080 |
+| `REDIS_URL` | Redis connection | redis://localhost:6379/0 |
+| `RAG_TOP_K` | Number of scriptures to retrieve | 5 |
+| `CRISIS_DETECTION_ENABLED` | Enable crisis detection | true |
+| `FREE_TRIAL_DAYS` | Free trial duration | 30 |
+
+## 🗄️ Database Models
+
+- **User** - User accounts and profiles
+- **Conversation** - User queries and AI responses
+- **Scripture** - Sanskrit scripture metadata
+- **Feedback** - User feedback for auto-learning
+- **CrisisLog** - Crisis detection events
+- **VisualCreation** - Generated visual stories
+- **SystemMetrics** - Performance metrics
+
+## 🔐 Authentication
+
+Uses JWT tokens with 7-day expiration. Include token in requests:
+
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN_HERE" \
+  http://localhost:8000/api/v1/wisdom/ask
+```
+
+## ⚠️ Important Notes
+
+### Before Running:
+1. ✅ Set up all required databases (PostgreSQL, Redis, Weaviate)
+2. ✅ Add all API keys to `.env`
+3. ✅ Create `app/__init__.py` files in all directories
+4. ✅ Populate Weaviate with scripture data (see Data Loading section)
+
+### Missing Files to Create:
+Create these empty `__init__.py` files:
+```bash
+touch app/__init__.py
+touch app/api/__init__.py
+touch app/api/v1/__init__.py
+touch app/core/__init__.py
+touch app/models/__init__.py
+touch app/services/__init__.py
+```
+
+## 📊 Loading Scripture Data
+
+You'll need to add Sanskrit scriptures to Weaviate. Create a script:
+
+```python
+# scripts/load_scriptures.py
+import asyncio
+from app.core.vector_store import add_scripture
+
+async def load_sample_data():
+    # Example: Bhagavad Gita 2.47
+    await add_scripture(
+        source_name="Bhagavad Gita",
+        source_type="gita",
+        chapter="2",
+        verse_number="47",
+        sanskrit_text="कर्मण्येवाधिकारस्ते मा फलेषु कदाचन",
+        english_translation="You have the right to perform your duty, but not to the fruits of your actions.",
+        themes=["karma", "detachment", "action"],
+        journey_stages=["searching", "awakening"],
+        chronological_order=3
+    )
+    print("Sample scripture loaded!")
+
+if __name__ == "__main__":
+    asyncio.run(load_sample_data())
+```
+
+## 🐛 Troubleshooting
+
+**Database connection error:**
+```bash
+# Check PostgreSQL is running
+pg_isready
+
+# Check connection string in .env
+```
+
+**Weaviate connection error:**
+```bash
+# Check Weaviate is running
+curl http://localhost:8080/v1/.well-known/ready
+
+# Check WEAVIATE_URL in .env
+```
+
+**Redis connection error:**
+```bash
+# Check Redis is running
+redis-cli ping
+
+# Should return: PONG
+```
+
+## 📚 Next Steps
+
+1. **Load Scripture Data** - Populate Weaviate with Sanskrit texts
+2. **Test Crisis Detection** - Ensure crisis system works properly
+3. **Fine-tune Models** - Optimize translation quality
+4. **Add Monitoring** - Set up logging and metrics
+5. **Deploy** - Move to production (Railway, AWS, GCP, etc.)
+
+## 🤝 Support
+
+For issues or questions about the backend implementation, check:
+- API Docs: http://localhost:8000/docs
+- Health Check: http://localhost:8000/health
+
+---
+
+**Status: Ready for Assembly & Testing** 🚀
+
+The backend is architecturally complete. Follow the setup steps above to run it!
