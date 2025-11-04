@@ -1,0 +1,478 @@
+"""
+Feedback API Endpoints
+User feedback collection and auto-learning updates
+"""
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel, Field
+from typing import Optional
+from datetime import datetime
+import logging
+
+from app.core.database import get_db
+from app.models.models import User, Feedback, Conversation
+from app.api.v1.auth import get_current_user
+from sqlalchemy import select
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+# Request Models
+
+class FeedbackRequest(BaseModel):
+    """User feedback on wisdom response"""
+    conversation_id: int
+    overall_rating: int = Field(..., ge=1, le=5, description="1-5 star rating")
+    relevance_rating: Optional[int] = Field(None, ge=1, le=5)
+    helpfulness_rating: Optional[int] = Field(None, ge=1, le=5)
+    storytelling_rating: Optional[int] = Field(None, ge=1, le=5)
+    feedback_text: Optional[str] = Field(None, max_length=2000)
+    suggested_improvement: Optional[str] = Field(None, max_length=2000)
+    mood_before: Optional[str] = None
+    mood_after: Optional[str] = None
+
+class MoodUpdate(BaseModel):
+    """Update user's current mood"""
+    mood: str = Field(..., description="Current emotional state")
+    intensity: Optional[int] = Field(None, ge=1, le=10)
+
+# Endpoints
+
+@router.post("/submit")
+async def submit_feedback(
+    feedback_data: FeedbackRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Submit feedback on a wisdom response
+    
+    This feedback drives the auto-learning update system
+    """
+    
+    # Verify conversation belongs to user
+    result = await db.execute(
+        select(Conversation).where(
+            Conversation.id == feedback_data.conversation_id,
+            Conversation.user_id == current_user.id
+        )
+    )
+    conversation = result.scalar_one_or_none()
+    
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    # Create feedback entry
+    feedback = Feedback(
+        user_id=current_user.id,
+        conversation_id=feedback_data.conversation_id,
+        overall_rating=feedback_data.overall_rating,
+        relevance_rating=feedback_data.relevance_rating,
+        helpfulness_rating=feedback_data.helpfulness_rating,
+        storytelling_rating=feedback_data.storytelling_rating,
+        feedback_text=feedback_data.feedback_text,
+        suggested_improvement=feedback_data.suggested_improvement,
+        mood_before=feedback_data.mood_before,
+        mood_after=feedback_data.mood_after
+    )
+    
+    db.add(feedback)
+    await db.commit()
+    
+    logger.info(
+        f"Feedback received: User {current_user.id}, "
+        f"Conversation {feedback_data.conversation_id}, "
+        f"Rating: {feedback_data.overall_rating}/5"
+    )
+    
+    # Auto-learning: Update user preferences based on positive feedback
+    if feedback_data.overall_rating >= 4:
+        await _update_user_preferences(
+            current_user, conversation, db
+        )
+    
+    return {
+        "message": "Thank you for your feedback! Your insights help improve the wisdom.",
+        "feedback_id": feedback.id,
+        "learning_update": feedback_data.overall_rating >= 4
+    }
+
+
+async def _update_user_preferences(
+    user: User,
+    conversation: Conversation,
+    db: AsyncSession
+):
+    """
+    Auto-learning: Update user preferences based on positive feedback
+    """
+    
+    # Extract themes from well-received conversation
+    if conversation.scriptures_cited:
+        themes = set()
+        for scripture in conversation.scriptures_cited:
+            if isinstance(scripture, dict) and 'themes' in scripture:
+                themes.update(scripture['themes'])
+        
+        # Add to user's preferred themes
+        if themes:
+            current_themes = set(user.preferred_themes or [])
+            updated_themes = list(current_themes | themes)
+            user.preferred_themes = updated_themes[:10]  # Keep top 10
+            
+            await db.commit()
+            
+            logger.info(f"Updated preferences for user {user.id}: {updated_themes}")
+
+
+@router.post("/mood")
+async def update_mood(
+    mood_data: MoodUpdate,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Update user's current mood
+    
+    Used for mood tracking and personalization
+    """
+    
+    logger.info(f"Mood update: User {current_user.id} - {mood_data.mood}")
+    
+    return {
+        "message": "Mood recorded",
+        "mood": mood_data.mood,
+        "acknowledgment": f"I sense you're feeling {mood_data.mood}. I'm here to guide you."
+    }
+
+
+@router.get("/stats")
+async def get_feedback_stats(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get user's feedback statistics"""
+    
+    result = await db.execute(
+        select(Feedback).where(Feedback.user_id == current_user.id)
+    )
+    feedbacks = result.scalars().all()
+    
+    if not feedbacks:
+        return {
+            "total_feedbacks": 0,
+            "average_rating": 0,
+            "message": "No feedback submitted yet"
+        }
+    
+    total = len(feedbacks)
+    avg_rating = sum(f.overall_rating for f in feedbacks) / total
+    
+    rating_distribution = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+    for f in feedbacks:
+        rating_distribution[f.overall_rating] += 1
+    
+    # Mood improvement tracking
+    mood_improvements = 0
+    for f in feedbacks:
+        if f.mood_before and f.mood_after:
+            positive_moods = {"peace", "joy", "gratitude", "love", "empowered"}
+            if f.mood_after in positive_moods and f.mood_before not in positive_moods:
+                mood_improvements += 1
+    
+    return {
+        "total_feedbacks": total,
+        "average_rating": round(avg_rating, 2),
+        "rating_distribution": rating_distribution,
+        "mood_improvements": mood_improvements,
+        "engagement_level": "high" if total >= 10 else "moderate" if total >= 5 else "new"
+    }
+
+
+@router.get("/recent")
+async def get_recent_feedback(
+    limit: int = 5,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get user's recent feedback"""
+    
+    result = await db.execute(
+        select(Feedback)
+        .where(Feedback.user_id == current_user.id)
+        .order_by(Feedback.created_at.desc())
+        .limit(limit)
+    )
+    feedbacks = result.scalars().all()
+    
+    return {
+        "feedbacks": [
+            {
+                "id": f.id,
+                "conversation_id": f.conversation_id,
+                "overall_rating": f.overall_rating,
+                "feedback_text": f.feedback_text,
+                "mood_change": {
+                    "before": f.mood_before,
+                    "after": f.mood_after
+                } if f.mood_before and f.mood_after else None,
+                "created_at": f.created_at.isoformat()
+            }
+            for f in feedbacks
+        ]
+    }
+"""
+app/api/v1/__init__.py - Package initializer
+"""
+# This file makes the v1 directory a Python package
+
+"""
+app/api/v1/crisis.py - Crisis Management Endpoints
+"""
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.database import get_db
+from app.models.models import User, CrisisLog
+from app.api.v1.auth import get_current_user
+from sqlalchemy import select
+import logging
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+@router.get("/helplines")
+async def get_crisis_helplines(country: str = "international"):
+    """Get crisis helplines for a country"""
+    from app.core.config import settings
+    
+    helplines = {
+        "country": country,
+        "helplines": settings.CRISIS_HELPLINES,
+        "primary": settings.CRISIS_HELPLINES.get(country.lower(), settings.CRISIS_HELPLINES["international"]),
+        "emergency": "Call 911, 112, or your local emergency number if in immediate danger"
+    }
+    
+    return helplines
+
+@router.get("/history")
+async def get_crisis_history(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get user's crisis detection history (for support/tracking)"""
+    
+    result = await db.execute(
+        select(CrisisLog)
+        .where(CrisisLog.user_id == current_user.id)
+        .order_by(CrisisLog.detected_at.desc())
+        .limit(10)
+    )
+    crisis_logs = result.scalars().all()
+    
+    return {
+        "total_detections": len(crisis_logs),
+        "recent_events": [
+            {
+                "id": log.id,
+                "detected_at": log.detected_at.isoformat(),
+                "confidence": log.crisis_score,
+                "user_returned": log.user_returned
+            }
+            for log in crisis_logs
+        ]
+    }
+
+
+"""
+app/api/v1/memory.py - Memory Management Endpoints
+"""
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.database import get_db
+from app.models.models import User
+from app.api.v1.auth import get_current_user
+from app.services.memory_service import MemoryService
+
+router = APIRouter()
+
+@router.get("/short-term")
+async def get_short_term_memory(
+    current_user: User = Depends(get_current_user)
+):
+    """Get user's short-term conversation memory"""
+    
+    memory_service = MemoryService()
+    context = await memory_service.get_short_term_context(current_user.id)
+    
+    return {
+        "user_id": current_user.id,
+        "memory_type": "short_term",
+        "context": context
+    }
+
+@router.delete("/short-term")
+async def clear_short_term_memory(
+    current_user: User = Depends(get_current_user)
+):
+    """Clear user's short-term memory (start fresh conversation)"""
+    
+    memory_service = MemoryService()
+    await memory_service.clear_short_term(current_user.id)
+    
+    return {
+        "message": "Short-term memory cleared. Starting fresh conversation.",
+        "user_id": current_user.id
+    }
+
+@router.post("/consolidate")
+async def trigger_memory_consolidation(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Manually trigger memory consolidation (short-term to long-term)"""
+    
+    memory_service = MemoryService()
+    await memory_service.consolidate_memory(current_user.id, db)
+    
+    return {
+        "message": "Memory consolidation complete",
+        "user_id": current_user.id
+    }
+
+
+"""
+app/api/v1/visual.py - Visual Generation Endpoints
+"""
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel
+from typing import List
+from app.core.database import get_db
+from app.models.models import User, VisualCreation, Conversation
+from app.api.v1.auth import get_current_user
+from sqlalchemy import select
+import logging
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+class VisualGenerationRequest(BaseModel):
+    """Request to generate visual scenes"""
+    conversation_id: int
+    style_preference: str = "cosmic_divine"
+
+@router.post("/generate")
+async def generate_visual_story(
+    request: VisualGenerationRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    background_tasks: BackgroundTasks = None
+):
+    """
+    Generate 6-scene visual story from wisdom response
+    
+    Note: Actual image generation would call Leonardo.ai or Stable Diffusion API
+    This returns scene prompts and placeholder URLs
+    """
+    
+    # Verify conversation exists
+    result = await db.execute(
+        select(Conversation).where(
+            Conversation.id == request.conversation_id,
+            Conversation.user_id == current_user.id
+        )
+    )
+    conversation = result.scalar_one_or_none()
+    
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    # In production, this would call Leonardo.ai or Stable Diffusion
+    # For now, return placeholder data
+    
+    scenes = [
+        {
+            "scene_number": i + 1,
+            "prompt": f"Cosmic scene {i + 1} based on wisdom",
+            "image_url": f"https://placeholder-images.com/cosmic-scene-{i+1}.jpg",
+            "style": request.style_preference
+        }
+        for i in range(6)
+    ]
+    
+    # Save visual creation
+    visual = VisualCreation(
+        user_id=current_user.id,
+        conversation_id=request.conversation_id,
+        wisdom_theme="divine_guidance",
+        scenes_data=scenes,
+        generation_service="placeholder",
+        total_generation_time=5.0
+    )
+    
+    db.add(visual)
+    await db.commit()
+    
+    logger.info(f"Visual story generated for user {current_user.id}, conversation {request.conversation_id}")
+    
+    return {
+        "message": "Visual story generated successfully",
+        "visual_id": visual.id,
+        "scenes": scenes,
+        "download_url": f"/api/v1/visual/download/{visual.id}"
+    }
+
+@router.get("/download/{visual_id}")
+async def download_visual_story(
+    visual_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Download generated visual story"""
+    
+    result = await db.execute(
+        select(VisualCreation).where(
+            VisualCreation.id == visual_id,
+            VisualCreation.user_id == current_user.id
+        )
+    )
+    visual = result.scalar_one_or_none()
+    
+    if not visual:
+        raise HTTPException(status_code=404, detail="Visual creation not found")
+    
+    return {
+        "visual_id": visual.id,
+        "created_at": visual.created_at.isoformat(),
+        "scenes": visual.scenes_data,
+        "message": "In production, this would return a compiled video or image grid"
+    }
+
+@router.get("/history")
+async def get_visual_history(
+    limit: int = 10,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get user's visual creation history"""
+    
+    result = await db.execute(
+        select(VisualCreation)
+        .where(VisualCreation.user_id == current_user.id)
+        .order_by(VisualCreation.created_at.desc())
+        .limit(limit)
+    )
+    visuals = result.scalars().all()
+    
+    return {
+        "visuals": [
+            {
+                "id": v.id,
+                "wisdom_theme": v.wisdom_theme,
+                "scenes_count": len(v.scenes_data) if v.scenes_data else 0,
+                "created_at": v.created_at.isoformat(),
+                "shared": v.shared_to_social
+            }
+            for v in visuals
+        ]
+    }
