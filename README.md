@@ -1,4 +1,4 @@
-# 🕉️ Ancient Wisdom Guidance App - Backend
+# Ancient Wisdom Guidance App - Backend
 
 A spiritual guidance application that delivers personalized wisdom from Sanskrit scriptures using a multi-LLM translation pipeline, Retrieval-Augmented Generation (RAG), and crisis detection & intervention.
 
