@@ -1,0 +1,310 @@
+"""
+Memory Service - Short-term and Long-term Memory Management
+Redis for short-term, PostgreSQL for long-term patterns
+"""
+
+import redis.asyncio as redis
+import json
+from typing import Dict, List, Optional
+import logging
+from datetime import datetime, timedelta
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
+class MemoryService:
+    """Manages user conversation memory and personalization"""
+    
+    def __init__(self):
+        self.redis_client = None
+    
+    async def init_redis(self):
+        """Initialize Redis connection"""
+        try:
+            self.redis_client = await redis.from_url(
+                settings.REDIS_URL,
+                max_connections=settings.REDIS_MAX_CONNECTIONS,
+                decode_responses=True
+            )
+            logger.info("✅ Redis memory store initialized")
+        except Exception as e:
+            logger.error(f"Redis initialization error: {e}")
+            raise
+    
+    async def close_redis(self):
+        """Close Redis connection"""
+        if self.redis_client:
+            await self.redis_client.close()
+    
+    # === SHORT-TERM MEMORY (Redis) ===
+    
+    async def add_to_short_term(
+        self,
+        user_id: int,
+        user_query: str,
+        ai_response: str
+    ):
+        """Add conversation turn to short-term memory"""
+        
+        if not self.redis_client:
+            await self.init_redis()
+        
+        key = f"short_term:{user_id}"
+        
+        conversation_turn = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "user_query": user_query,
+            "ai_response": ai_response
+        }
+        
+        # Store as list
+        await self.redis_client.lpush(key, json.dumps(conversation_turn))
+        
+        # Keep only last 10 conversations (working memory)
+        await self.redis_client.ltrim(key, 0, 9)
+        
+        # Set TTL (expire after 1 hour of inactivity)
+        await self.redis_client.expire(key, settings.SHORT_TERM_MEMORY_TTL)
+    
+    async def get_short_term_context(
+        self,
+        user_id: int,
+        conversation_history: Optional[List[Dict]] = None
+    ) -> Dict:
+        """
+        Get short-term memory context for current conversation
+        
+        Returns:
+            Dictionary with recent topics, summary, and full history
+        """
+        
+        if not self.redis_client:
+            await self.init_redis()
+        
+        key = f"short_term:{user_id}"
+        
+        # Get recent conversations from Redis
+        recent_raw = await self.redis_client.lrange(key, 0, 4)  # Last 5
+        recent_conversations = [json.loads(c) for c in recent_raw]
+        
+        # Extract topics (simple keyword extraction)
+        topics = set()
+        for conv in recent_conversations:
+            query = conv['user_query'].lower()
+            # Extract nouns/topics (basic approach)
+            words = [w for w in query.split() if len(w) > 4]
+            topics.update(words[:3])  # Top 3 words per query
+        
+        # Create summary
+        summary = ""
+        if recent_conversations:
+            last_query = recent_conversations[0]['user_query']
+            summary = f"User recently asked about: {last_query[:100]}..."
+        
+        return {
+            "recent_topics": list(topics)[:5],
+            "summary": summary,
+            "conversation_count": len(recent_conversations),
+            "full_history": recent_conversations
+        }
+    
+    async def clear_short_term(self, user_id: int):
+        """Clear short-term memory for user"""
+        if not self.redis_client:
+            await self.init_redis()
+        
+        key = f"short_term:{user_id}"
+        await self.redis_client.delete(key)
+    
+    # === LONG-TERM MEMORY (PostgreSQL) ===
+    
+    async def analyze_user_journey(
+        self,
+        user_id: int,
+        db_session
+    ) -> Dict:
+        """
+        Analyze user's spiritual journey from conversation history
+        
+        Returns:
+            Journey insights: patterns, growth, recommended themes
+        """
+        from sqlalchemy import select, func
+        from app.models.models import Conversation, User
+        
+        # Get user's conversations from DB
+        result = await db_session.execute(
+            select(Conversation)
+            .where(Conversation.user_id == user_id)
+            .order_by(Conversation.created_at.desc())
+            .limit(50)
+        )
+        conversations = result.scalars().all()
+        
+        if not conversations:
+            return {
+                "journey_stage": "triggered",
+                "dominant_emotions": [],
+                "growth_indicators": [],
+                "recommended_themes": ["dharma", "acceptance"]
+            }
+        
+        # Analyze patterns
+        all_emotions = []
+        all_themes = []
+        
+        for conv in conversations:
+            if conv.user_emotion:
+                all_emotions.append(conv.user_emotion)
+            
+            # Extract themes from scriptures cited
+            if conv.scriptures_cited:
+                for scripture in conv.scriptures_cited:
+                    if isinstance(scripture, dict) and 'themes' in scripture:
+                        all_themes.extend(scripture['themes'])
+        
+        # Count frequencies
+        emotion_counts = {}
+        for emotion in all_emotions:
+            emotion_counts[emotion] = emotion_counts.get(emotion, 0) + 1
+        
+        theme_counts = {}
+        for theme in all_themes:
+            theme_counts[theme] = theme_counts.get(theme, 0) + 1
+        
+        # Determine journey stage based on emotional patterns
+        journey_stage = self._determine_journey_stage(emotion_counts, len(conversations))
+        
+        # Growth indicators (improving emotional state over time)
+        growth_indicators = []
+        if len(conversations) >= 5:
+            recent_emotions = [c.user_emotion for c in conversations[:5] if c.user_emotion]
+            older_emotions = [c.user_emotion for c in conversations[5:15] if c.user_emotion]
+            
+            positive_emotions = {"peace", "joy", "gratitude", "love"}
+            
+            recent_positive = sum(1 for e in recent_emotions if e in positive_emotions)
+            older_positive = sum(1 for e in older_emotions if e in positive_emotions)
+            
+            if recent_positive > older_positive:
+                growth_indicators.append("Increasing positive emotional states")
+            
+            if len(conversations) >= 10:
+                growth_indicators.append("Consistent engagement with wisdom")
+        
+        # Recommended themes based on current needs
+        recommended_themes = self._recommend_themes(journey_stage, emotion_counts)
+        
+        return {
+            "journey_stage": journey_stage,
+            "dominant_emotions": sorted(emotion_counts.items(), key=lambda x: x[1], reverse=True)[:3],
+            "preferred_themes": sorted(theme_counts.items(), key=lambda x: x[1], reverse=True)[:5],
+            "growth_indicators": growth_indicators,
+            "recommended_themes": recommended_themes,
+            "total_conversations": len(conversations)
+        }
+    
+    def _determine_journey_stage(
+        self,
+        emotion_counts: Dict[str, int],
+        conversation_count: int
+    ) -> str:
+        """Determine user's spiritual journey stage"""
+        
+        if conversation_count < 3:
+            return "triggered"
+        
+        negative_emotions = {"fear", "anger", "grief", "shame", "guilt", "confusion"}
+        positive_emotions = {"peace", "joy", "gratitude", "love"}
+        
+        total_emotions = sum(emotion_counts.values())
+        if total_emotions == 0:
+            return "searching"
+        
+        negative_count = sum(emotion_counts.get(e, 0) for e in negative_emotions)
+        positive_count = sum(emotion_counts.get(e, 0) for e in positive_emotions)
+        
+        positive_ratio = positive_count / total_emotions
+        
+        if positive_ratio >= 0.7:
+            return "empowered" if conversation_count >= 20 else "awakening"
+        elif positive_ratio >= 0.4:
+            return "surrendering"
+        elif conversation_count >= 10:
+            return "searching"
+        else:
+            return "triggered"
+    
+    def _recommend_themes(
+        self,
+        journey_stage: str,
+        emotion_counts: Dict[str, int]
+    ) -> List[str]:
+        """Recommend themes based on journey stage and emotions"""
+        
+        stage_themes = {
+            "triggered": ["acceptance", "surrender", "faith"],
+            "searching": ["dharma", "karma", "true_love"],
+            "surrendering": ["detachment", "surrender", "faith"],
+            "awakening": ["dharma", "detachment", "action"],
+            "detached": ["karma", "action", "true_love"],
+            "empowered": ["dharma", "action", "true_love"]
+        }
+        
+        # Get dominant emotion
+        dominant_emotion = max(emotion_counts.items(), key=lambda x: x[1])[0] if emotion_counts else None
+        
+        # Emotion-specific themes
+        emotion_themes = {
+            "fear": ["faith", "surrender", "acceptance"],
+            "anger": ["detachment", "acceptance", "forgiveness"],
+            "grief": ["acceptance", "faith", "love"],
+            "confusion": ["dharma", "inquiry", "wisdom"],
+            "love": ["true_love", "devotion", "surrender"]
+        }
+        
+        base_themes = stage_themes.get(journey_stage, ["dharma", "acceptance"])
+        emotion_specific = emotion_themes.get(dominant_emotion, [])
+        
+        # Combine and deduplicate
+        recommended = list(set(base_themes + emotion_specific))
+        
+        return recommended[:5]
+    
+    async def consolidate_memory(
+        self,
+        user_id: int,
+        db_session
+    ):
+        """
+        Consolidate important short-term memories to long-term
+        Called periodically or after N conversations
+        """
+        
+        # Get short-term memory
+        context = await self.get_short_term_context(user_id)
+        
+        if context['conversation_count'] < settings.LONG_TERM_MEMORY_THRESHOLD:
+            return
+        
+        # Analyze journey and update user profile
+        journey_analysis = await self.analyze_user_journey(user_id, db_session)
+        
+        # Update user's journey stage and preferred themes in DB
+        from sqlalchemy import select
+        from app.models.models import User
+        
+        result = await db_session.execute(
+            select(User).where(User.id == user_id)
+        )
+        user = result.scalar_one_or_none()
+        
+        if user:
+            user.journey_stage = journey_analysis['journey_stage']
+            user.preferred_themes = [t[0] for t in journey_analysis['preferred_themes']]
+            await db_session.commit()
+            
+            logger.info(
+                f"Memory consolidated for user {user_id}: "
+                f"Stage={journey_analysis['journey_stage']}"
+            )
