@@ -1,0 +1,407 @@
+# 🚀 Complete Setup Guide - Ancient Wisdom Backend
+
+## Step-by-Step Assembly Instructions
+
+### Phase 1: Project Structure Setup (5 minutes)
+
+```bash
+# 1. Create main project directory
+mkdir ancient-wisdom-backend
+cd ancient-wisdom-backend
+
+# 2. Create all subdirectories
+mkdir -p app/api/v1 app/core app/models app/services data/uploads data/processed tests scripts
+
+# 3. Create all __init__.py files (CRITICAL!)
+touch app/__init__.py
+touch app/api/__init__.py
+touch app/api/v1/__init__.py
+touch app/core/__init__.py
+touch app/models/__init__.py
+touch app/services/__init__.py
+```
+
+### Phase 2: Copy Code Files (10 minutes)
+
+Copy the code from each artifact I created into these files:
+
+```
+📂 Project Root:
+├── main.py                    → Copy from "Main FastAPI Application"
+├── requirements.txt           → Copy from "requirements.txt"
+├── .env.example              → Copy from ".env.example"
+└── README.md                 → Copy from "README.md"
+
+📂 app/core/:
+├── config.py                 → Copy from "Configuration"
+├── database.py               → Copy from "Database Connection"
+└── vector_store.py           → Copy from "Weaviate Vector Store"
+
+📂 app/models/:
+└── models.py                 → Copy from "Database Models"
+
+📂 app/services/:
+├── crisis_detector.py        → Copy from "Crisis Detection Service"
+├── translation_pipeline.py   → Copy from "Multi-LLM Translation Pipeline"
+├── wisdom_service.py         → Copy from "Wisdom Service (RAG)"
+└── memory_service.py         → Copy from "Memory Service"
+
+📂 app/api/v1/:
+├── __init__.py               → Copy from "Additional Routers" (first section)
+├── auth.py                   → Copy from "Authentication Router"
+├── wisdom.py                 → Copy from "Wisdom API Router"
+├── feedback.py               → Copy from "Feedback Router"
+├── crisis.py                 → Copy from "Additional Routers" (crisis section)
+├── memory.py                 → Copy from "Additional Routers" (memory section)
+└── visual.py                 → Copy from "Additional Routers" (visual section)
+```
+
+**IMPORTANT:** The `main.py` should be in the root `app/` directory, not project root!
+
+Correct structure:
+```
+ancient-wisdom-backend/
+├── app/
+│   └── main.py      ← HERE!
+```
+
+### Phase 3: Environment Setup (15 minutes)
+
+```bash
+# 1. Create and activate virtual environment
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+
+# 2. Install dependencies
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# This may take 5-10 minutes as it installs PyTorch, transformers, etc.
+```
+
+### Phase 4: Database Setup (10 minutes)
+
+#### PostgreSQL Setup
+
+```bash
+# Option A: Using psql command line
+createdb ancient_wisdom_db
+
+# Option B: Using PostgreSQL client
+psql -U postgres
+CREATE DATABASE ancient_wisdom_db;
+\q
+
+# Test connection
+psql -U postgres -d ancient_wisdom_db -c "SELECT version();"
+```
+
+#### Redis Setup
+
+```bash
+# Check if Redis is running
+redis-cli ping
+# Should output: PONG
+
+# If not installed, install Redis:
+# Mac: brew install redis && brew services start redis
+# Ubuntu: sudo apt install redis-server && sudo systemctl start redis
+# Windows: Use WSL or download from Redis website
+```
+
+#### Weaviate Setup
+
+```bash
+# Option A: Docker (Recommended)
+docker run -d \
+  --name weaviate \
+  -p 8080:8080 \
+  -e QUERY_DEFAULTS_LIMIT=25 \
+  -e AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true \
+  -e PERSISTENCE_DATA_PATH='/var/lib/weaviate' \
+  -e ENABLE_MODULES='text2vec-openai' \
+  -e OPENAI_APIKEY='your-openai-key' \
+  semitechnologies/weaviate:latest
+
+# Test Weaviate
+curl http://localhost:8080/v1/.well-known/ready
+# Should output: {"applicationReady":true}
+
+# Option B: Weaviate Cloud (Free tier available)
+# Sign up at: https://console.weaviate.cloud
+# Get your cluster URL and API key
+```
+
+### Phase 5: Configuration (5 minutes)
+
+```bash
+# 1. Copy example environment file
+cp .env.example .env
+
+# 2. Edit .env file with your values
+nano .env  # or code .env, vim .env, etc.
+```
+
+**Minimum Required Configuration:**
+
+```bash
+# Database
+DATABASE_URL=postgresql+asyncpg://postgres:password@localhost:5432/ancient_wisdom_db
+
+# Weaviate
+WEAVIATE_URL=http://localhost:8080  # or your cloud URL
+WEAVIATE_API_KEY=  # Leave empty for local
+
+# Redis
+REDIS_URL=redis://localhost:6379/0
+
+# Security (CHANGE THIS!)
+SECRET_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+
+# LLM API Keys (GET THESE FIRST!)
+ANTHROPIC_API_KEY=sk-ant-your-key-here
+GOOGLE_API_KEY=your-gemini-key-here
+PERPLEXITY_API_KEY=pplx-your-key-here
+OPENAI_API_KEY=sk-your-openai-key-here
+```
+
+### Phase 6: Get API Keys (10 minutes)
+
+#### 1. Anthropic (Claude) - REQUIRED
+- Go to: https://console.anthropic.com
+- Sign up / Log in
+- Navigate to API Keys
+- Create new key
+- Copy to `.env` as `ANTHROPIC_API_KEY`
+
+#### 2. Google (Gemini) - REQUIRED
+- Go to: https://makersuite.google.com/app/apikey
+- Sign in with Google account
+- Click "Create API Key"
+- Copy to `.env` as `GOOGLE_API_KEY`
+
+#### 3. Perplexity - REQUIRED
+- Go to: https://www.perplexity.ai/settings/api
+- Sign up / Log in
+- Generate API key
+- Copy to `.env` as `PERPLEXITY_API_KEY`
+
+#### 4. OpenAI - REQUIRED
+- Go to: https://platform.openai.com/api-keys
+- Sign up / Log in
+- Create new secret key
+- Copy to `.env` as `OPENAI_API_KEY`
+
+### Phase 7: Initialize Database Tables (2 minutes)
+
+```bash
+# Start the app once to create tables automatically
+python -c "
+from app.core.database import init_db
+from app.core.vector_store import init_weaviate
+import asyncio
+
+async def setup():
+    await init_db()
+    await init_weaviate()
+    print('✅ Database initialized!')
+
+asyncio.run(setup())
+"
+```
+
+### Phase 8: First Run! (1 minute)
+
+```bash
+# Start the development server
+cd ancient-wisdom-backend
+source venv/bin/activate
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+You should see:
+```
+INFO:     Will watch for changes in these directories: ['/path/to/ancient-wisdom-backend']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process
+INFO:     Started server process
+INFO:     Waiting for application startup.
+🕉️ Ancient Wisdom App Starting...
+✅ Database initialized successfully
+✅ Weaviate initialized successfully
+✅ All systems initialized
+INFO:     Application startup complete.
+```
+
+### Phase 9: Test the API (2 minutes)
+
+#### Option 1: Web Browser
+Open: http://localhost:8000/docs
+
+You'll see interactive API documentation!
+
+#### Option 2: Command Line
+```bash
+# Health check
+curl http://localhost:8000/health
+
+# Expected output:
+# {
+#   "status": "healthy",
+#   "timestamp": "2025-10-28T...",
+#   "service": "Ancient Wisdom API",
+#   "version": "1.0.0"
+# }
+```
+
+### Phase 10: Create First User (2 minutes)
+
+```bash
+# Register a test user
+curl -X POST http://localhost:8000/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "test@example.com",
+    "password": "testpassword123",
+    "age": 30,
+    "life_context": "Testing the Ancient Wisdom app"
+  }'
+
+# Save the access_token from the response!
+```
+
+### Phase 11: Test Wisdom Endpoint (3 minutes)
+
+```bash
+# Replace YOUR_TOKEN with the access_token from registration
+curl -X POST http://localhost:8000/api/v1/wisdom/ask \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "I am feeling lost in life. What should I do?",
+    "input_mode": "text",
+    "detected_emotion": "confusion"
+  }'
+```
+
+**NOTE:** First request will fail if no scriptures are loaded!
+
+### Phase 12: Load Sample Scripture Data (5 minutes)
+
+Create `scripts/load_sample_scriptures.py`:
+
+```python
+import asyncio
+import sys
+sys.path.append('.')
+
+from app.core.vector_store import init_weaviate, add_scripture
+from app.core.database import init_db
+
+async def load_samples():
+    await init_db()
+    await init_weaviate()
+    
+    # Bhagavad Gita samples
+    scriptures = [
+        {
+            "source_name": "Bhagavad Gita",
+            "source_type": "gita",
+            "chapter": "2",
+            "verse_number": "47",
+            "sanskrit_text": "कर्मण्येवाधिकारस्ते मा फलेषु कदाचन। मा कर्मफलहेतुर्भूर्मा ते सङ्गोऽस्त्वकर्मणि॥",
+            "english_translation": "You have the right to perform your duty, but you are not entitled to the fruits of your actions. Never consider yourself to be the cause of the results, and never be attached to inaction.",
+            "themes": ["karma", "detachment", "action", "dharma"],
+            "situations": ["decision_making", "career_block"],
+            "emotions": ["confusion", "fear"],
+            "journey_stages": ["searching", "awakening"],
+            "chronological_order": 3
+        },
+        {
+            "source_name": "Bhagavad Gita",
+            "source_type": "gita",
+            "chapter": "2",
+            "verse_number": "14",
+            "sanskrit_text": "मात्रास्पर्शास्तु कौन्तेय शीतोष्णसुखदुःखदाः। आगमापायिनोऽनित्यास्तांस्तितिक्षस्व भारत॥",
+            "english_translation": "The contact between the senses and sense objects gives rise to fleeting experiences of pleasure and pain. These are transient, coming and going like seasons. Learn to tolerate them without being disturbed.",
+            "themes": ["detachment", "acceptance", "equanimity"],
+            "situations": ["loss", "grief", "illness"],
+            "emotions": ["grief", "pain", "sadness"],
+            "journey_stages": ["triggered", "surrendering"],
+            "chronological_order": 3
+        }
+    ]
+    
+    for scripture in scriptures:
+        await add_scripture(**scripture)
+        print(f"✅ Loaded: {scripture['source_name']} {scripture['chapter']}:{scripture['verse_number']}")
+    
+    print(f"\n🎉 Successfully loaded {len(scriptures)} scriptures!")
+
+if __name__ == "__main__":
+    asyncio.run(load_samples())
+```
+
+Run it:
+```bash
+python scripts/load_sample_scriptures.py
+```
+
+## ✅ Verification Checklist
+
+- [ ] All directories created
+- [ ] All `__init__.py` files created
+- [ ] All code files copied correctly
+- [ ] Virtual environment activated
+- [ ] Dependencies installed
+- [ ] PostgreSQL running and database created
+- [ ] Redis running
+- [ ] Weaviate running
+- [ ] `.env` file configured with all API keys
+- [ ] Server starts without errors
+- [ ] Health check responds
+- [ ] User registration works
+- [ ] Sample scriptures loaded
+- [ ] Wisdom endpoint returns response
+
+## 🐛 Common Issues & Fixes
+
+### Issue: Import errors
+```
+Fix: Make sure ALL __init__.py files exist in every directory
+```
+
+### Issue: Database connection failed
+```
+Fix: Check DATABASE_URL in .env matches your PostgreSQL setup
+Test with: psql -U postgres -d ancient_wisdom_db
+```
+
+### Issue: Weaviate connection failed
+```
+Fix: Check Weaviate is running: curl http://localhost:8080/v1/.well-known/ready
+```
+
+### Issue: API key errors
+```
+Fix: Verify all 4 API keys are valid in .env
+Test each key individually in their respective platforms
+```
+
+### Issue: Module not found
+```
+Fix: Make sure you're running from the project root
+And virtual environment is activated
+```
+
+## 🎉 Success! What's Next?
+
+1. **Load More Scriptures** - Add more verses from Bhagavad Gita, Upanishads, Vedas
+2. **Test All Endpoints** - Use the Swagger UI at /docs
+3. **Test Crisis Detection** - Try a message with crisis keywords
+4. **Build Frontend** - Connect your PWA frontend to these APIs
+5. **Deploy** - Move to production (Railway, AWS, GCP, Render, etc.)
+
+---
+
+**You're ready to run!** 🚀🕉️
